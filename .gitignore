@@ -1,0 +1,5 @@
+.env
+*.o
+.DS_Store
+HotkeyLauncher
+voice-input-cli

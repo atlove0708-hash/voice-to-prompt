@@ -1,5 +1,8 @@
 .env
 *.o
 .DS_Store
+.build/
+.swiftpm/
+VoiceToPrompt
 HotkeyLauncher
 voice-input-cli

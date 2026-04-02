@@ -2,14 +2,11 @@
 set -e
 
 # ╔════════════════════════════════════════════════════╗
-# ║  Voice to Prompt - インストーラー                  ║
+# ║  Voice to Prompt v5 - インストーラー               ║
 # ║  話すだけでAIが最適なプロンプトを生成 (無料)        ║
 # ║                                                    ║
 # ║  使い方:                                           ║
-# ║    bash install.sh                                 ║
-# ║                                                    ║
-# ║  または:                                           ║
-# ║    curl -fsSL <URL>/install.sh | bash              ║
+# ║    git clone → cd voice-to-prompt → bash install.sh║
 # ╚════════════════════════════════════════════════════╝
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' D='\033[2m' N='\033[0m'
@@ -21,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
 
 echo ""
 echo -e "${B}  ╔══════════════════════════════════════╗${N}"
-echo -e "${B}  ║       Voice to Prompt                ║${N}"
+echo -e "${B}  ║     Voice to Prompt  v5.0            ║${N}"
 echo -e "${B}  ║   話すだけでプロンプト生成 (無料)     ║${N}"
 echo -e "${B}  ╚══════════════════════════════════════╝${N}"
 echo ""
@@ -31,13 +28,11 @@ echo ""
 # ============================================================
 echo -e "  ${C}[1/5] 環境チェック${N}"
 
-# macOS
 if [[ "$(uname)" != "Darwin" ]]; then
     echo -e "  ${R}✗ macOS専用です${N}"; exit 1
 fi
 echo -e "  ${D}  macOS $(sw_vers -productVersion)${N}"
 
-# Xcode CLT
 if ! command -v swiftc &>/dev/null; then
     echo -e "  ${Y}  Xcode Command Line Tools をインストールします...${N}"
     xcode-select --install 2>/dev/null || true
@@ -46,56 +41,60 @@ if ! command -v swiftc &>/dev/null; then
 fi
 echo -e "  ${D}  Swift $(swiftc --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)${N}"
 
-# Python3
 if ! command -v python3 &>/dev/null; then
     echo -e "  ${R}✗ Python3が必要です${N}"; exit 1
 fi
-echo -e "  ${D}  Python $(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')${N}"
 
-# curl
 command -v curl &>/dev/null || { echo -e "  ${R}✗ curlが必要です${N}"; exit 1; }
-
 echo -e "  ${G}✓ 環境OK${N}"
 echo ""
 
 # ============================================================
-#  ディレクトリ作成
-# ============================================================
-echo -e "  ${C}[2/5] インストール${N}"
-mkdir -p "$INSTALL_DIR" "$BIN_DIR"
-
-# ============================================================
 #  ソースファイル配置
 # ============================================================
-# ローカルにあればコピー、なければ埋め込み
-if [ -f "$SCRIPT_DIR/HotkeyLauncher.swift" ]; then
-    cp "$SCRIPT_DIR/HotkeyLauncher.swift" "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/voice-input-cli.swift" "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/system_prompt.txt" "$INSTALL_DIR/"
+echo -e "  ${C}[2/5] ファイル配置${N}"
+mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+
+# v5モジュラー構成のソースをコピー
+if [ -d "$SCRIPT_DIR/Sources" ]; then
+    cp -r "$SCRIPT_DIR/Sources" "$INSTALL_DIR/"
+    cp -r "$SCRIPT_DIR/Resources" "$INSTALL_DIR/"
+    [ -f "$SCRIPT_DIR/system_prompt.txt" ] && cp "$SCRIPT_DIR/system_prompt.txt" "$INSTALL_DIR/"
+    [ -f "$SCRIPT_DIR/voice-input-cli.swift" ] && cp "$SCRIPT_DIR/voice-input-cli.swift" "$INSTALL_DIR/"
     echo -e "  ${D}  ソースファイルをコピー${N}"
 else
-    echo -e "  ${R}✗ ソースファイルが見つかりません。リポジトリからcloneしてください。${N}"
+    echo -e "  ${R}✗ Sourcesフォルダが見つかりません。リポジトリからcloneしてください。${N}"
     exit 1
 fi
+
+echo -e "  ${G}✓ 配置完了${N}"
+echo ""
 
 # ============================================================
 #  コンパイル
 # ============================================================
 echo -e "  ${C}[3/5] コンパイル中...${N}"
 
-# 音声入力CLI
-echo -e "  ${D}  voice-input-cli をビルド中...${N}"
-swiftc -O -framework Speech -framework AVFoundation \
-    "$INSTALL_DIR/voice-input-cli.swift" \
-    -o "$INSTALL_DIR/voice-input-cli" 2>/dev/null
-echo -e "  ${D}  ✓ voice-input-cli${N}"
+# v5: モジュラー構成 - 全Swiftファイルを一括コンパイル
+SOURCES=$(find "$INSTALL_DIR/Sources/VoiceToPrompt" -name "*.swift" | sort)
+SOURCE_COUNT=$(echo "$SOURCES" | wc -l | tr -d ' ')
+echo -e "  ${D}  $SOURCE_COUNT ファイルをコンパイル中...${N}"
 
-# メインアプリ
-echo -e "  ${D}  VoiceToPrompt をビルド中...${N}"
-swiftc -O -framework Cocoa -framework Carbon -framework Speech -framework AVFoundation \
-    "$INSTALL_DIR/HotkeyLauncher.swift" \
-    -o "$INSTALL_DIR/HotkeyLauncher" 2>/dev/null
-echo -e "  ${D}  ✓ VoiceToPrompt${N}"
+swiftc -O \
+    -framework Cocoa -framework Carbon -framework Speech -framework AVFoundation \
+    -module-name VoiceToPrompt \
+    $SOURCES \
+    -o "$INSTALL_DIR/VoiceToPrompt" 2>/dev/null
+
+echo -e "  ${D}  ✓ VoiceToPrompt (メインアプリ)${N}"
+
+# CLI版
+if [ -f "$INSTALL_DIR/voice-input-cli.swift" ]; then
+    swiftc -O -framework Speech -framework AVFoundation \
+        "$INSTALL_DIR/voice-input-cli.swift" \
+        -o "$INSTALL_DIR/voice-input-cli" 2>/dev/null
+    echo -e "  ${D}  ✓ voice-input-cli (ターミナル用)${N}"
+fi
 
 echo -e "  ${G}✓ コンパイル完了${N}"
 echo ""
@@ -105,8 +104,13 @@ echo ""
 # ============================================================
 echo -e "  ${C}[4/5] アプリ作成${N}"
 mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/Resources"
 
-cp "$INSTALL_DIR/HotkeyLauncher" "$APP_DIR/Contents/MacOS/VoiceToPrompt"
+cp "$INSTALL_DIR/VoiceToPrompt" "$APP_DIR/Contents/MacOS/VoiceToPrompt"
+
+# system_prompt.txtをResourcesにもコピー
+[ -f "$INSTALL_DIR/system_prompt.txt" ] && cp "$INSTALL_DIR/system_prompt.txt" "$APP_DIR/Contents/Resources/"
+[ -f "$INSTALL_DIR/Resources/system_prompt.txt" ] && cp "$INSTALL_DIR/Resources/system_prompt.txt" "$APP_DIR/Contents/Resources/"
 
 cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -116,10 +120,13 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <key>CFBundleExecutable</key><string>VoiceToPrompt</string>
     <key>CFBundleIdentifier</key><string>com.voicetoprompt.launcher</string>
     <key>CFBundleName</key><string>VoiceToPrompt</string>
-    <key>CFBundleVersion</key><string>3.0</string>
+    <key>CFBundleDisplayName</key><string>Voice to Prompt</string>
+    <key>CFBundleVersion</key><string>5.0.0</string>
+    <key>CFBundleShortVersionString</key><string>5.0.0</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>音声入力のためにマイクを使用します</string>
-    <key>NSSpeechRecognitionUsageDescription</key><string>音声をテキストに変換するために使用します</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>音声をテキストに変換するために音声認識を使用します</string>
 </dict>
 </plist>
 PLIST
@@ -127,7 +134,7 @@ PLIST
 xattr -cr "$APP_DIR" 2>/dev/null
 codesign -s - -f "$APP_DIR" 2>/dev/null
 
-# vp コマンドのシンボリックリンク
+# --- vp コマンド ---
 cat > "$BIN_DIR/vp" << 'VPSCRIPT'
 #!/bin/bash
 DIR="$HOME/.local/share/voice-to-prompt"
@@ -156,8 +163,8 @@ T=$("$DIR/voice-input-cli" 2>/dev/tty)
 [ -z "$T" ] && echo -e "\033[1;33m  音声なし\033[0m" && exit 1
 echo -e "\n  📝 $T\n  ✨ 変換中..."
 AK=$(grep "GEMINI_API_KEY=" "$ENV" | cut -d= -f2)
-SP=$(cat "$DIR/system_prompt.txt" 2>/dev/null || echo "音声テキストをプロンプトに整えてください。")
-B=$(python3 -c "import json,sys;print(json.dumps({'system_instruction':{'parts':[{'text':sys.argv[1]}]},'contents':[{'parts':[{'text':'以下の音声テキストを最適なプロンプトに変換してください:\n\n'+sys.argv[2]}]}],'generationConfig':{'maxOutputTokens':800,'temperature':0.2}},ensure_ascii=False))" "$SP" "$T" 2>/dev/null)
+SP=$(cat "$DIR/system_prompt.txt" 2>/dev/null || cat "$DIR/Resources/system_prompt.txt" 2>/dev/null || echo "音声テキストをプロンプトに整えてください。")
+B=$(python3 -c "import json,sys;print(json.dumps({'system_instruction':{'parts':[{'text':sys.argv[1]}]},'contents':[{'parts':[{'text':'以下の音声テキストを最適なプロンプトに変換してください:\n\n'+sys.argv[2]}]}],'generationConfig':{'maxOutputTokens':2000,'temperature':0.2}},ensure_ascii=False))" "$SP" "$T" 2>/dev/null)
 P=""
 for M in gemini-2.5-flash-lite gemini-2.0-flash-lite gemini-2.5-flash; do
     R=$(curl -s --max-time 10 "https://generativelanguage.googleapis.com/v1beta/models/$M:generateContent?key=$AK" -H "Content-Type: application/json" -d "$B" 2>/dev/null)
@@ -180,14 +187,22 @@ echo ""
 VPSCRIPT
 chmod +x "$BIN_DIR/vp"
 
-# デスクトップショートカット
+# --- vp-history / vp-view ---
+for cmd in vp-history vp-view; do
+    if [ -f "$SCRIPT_DIR/$cmd" ]; then
+        cp "$SCRIPT_DIR/$cmd" "$BIN_DIR/$cmd"
+        chmod +x "$BIN_DIR/$cmd"
+    fi
+done
+
+# --- デスクトップショートカット ---
 cat > "$HOME/Desktop/Voice to Prompt.command" << 'LAUNCHER'
 #!/bin/bash
 exec "$HOME/.local/bin/vp"
 LAUNCHER
 chmod +x "$HOME/Desktop/Voice to Prompt.command"
 
-# PATH追加
+# --- PATH追加 ---
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$BIN_DIR"; then
     RC="$HOME/.zshrc"
     [ ! -f "$RC" ] && RC="$HOME/.bashrc"
@@ -196,7 +211,7 @@ if ! echo "$PATH" | tr ':' '\n' | grep -q "$BIN_DIR"; then
     fi
 fi
 
-# ログイン項目に追加
+# --- ログイン項目に追加 ---
 osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP_DIR\", hidden:true}" 2>/dev/null || true
 
 echo -e "  ${G}✓ アプリ作成完了${N}"
@@ -264,13 +279,9 @@ echo -e "  ${B}使い方 (2通り):${N}"
 echo ""
 echo -e "  ${C}● ショートカットキー (おすすめ)${N}"
 echo -e "    ${B}Shift+Space${N} → 話す → ${B}Shift+Space${N} → ${B}Cmd+V${N}"
-echo -e "    ${D}(アクセシビリティの許可が必要 → 設定画面が開きます)${N}"
 echo ""
 echo -e "  ${C}● ターミナルから${N}"
 echo -e "    ${B}vp${N} → 話す → ${B}Enter${N} → ${B}Cmd+V${N}"
-echo ""
-echo -e "  ${C}● ダブルクリック${N}"
-echo -e "    デスクトップの ${B}「Voice to Prompt」${N} をダブルクリック"
 echo ""
 echo -e "  ${D}メニューバーに 🎤 が常駐します${N}"
 echo -e "  ${D}Mac再起動後も自動で起動します${N}"

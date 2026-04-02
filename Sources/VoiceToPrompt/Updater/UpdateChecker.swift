@@ -17,7 +17,7 @@ enum UpdateChecker {
     /// GitHub Releasesから最新バージョンを確認
     /// repo: "owner/repo" 形式
     static func check(
-        repo: String = "kobayashitakuro/voice-to-prompt",
+        repo: String = "atlove0708-hash/voice-to-prompt",
         completion: @escaping (Release?) -> Void
     ) {
         let urlStr = "https://api.github.com/repos/\(repo)/releases/latest"

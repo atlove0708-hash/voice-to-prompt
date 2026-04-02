@@ -24,7 +24,7 @@ Shift+Space → 「えっとなんかPythonでウェブサイトのデータ取�
 ## インストール (3分)
 
 ```bash
-git clone https://github.com/kobayashitakuro/voice-to-prompt.git
+git clone https://github.com/atlove0708-hash/voice-to-prompt.git
 cd voice-to-prompt
 bash install.sh
 ```

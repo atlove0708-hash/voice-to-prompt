@@ -9,7 +9,7 @@ set -e
 # ╚════════════════════════════════════════════════════╝
 
 G='\033[0;32m' C='\033[0;36m' Y='\033[1;33m' R='\033[0;31m' B='\033[1m' D='\033[2m' N='\033[0m'
-REPO="kobayashitakuro/voice-to-prompt"
+REPO="atlove0708-hash/voice-to-prompt"
 INSTALL_DIR="$HOME/.local/share/voice-to-prompt"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/Applications/VoiceToPrompt.app"

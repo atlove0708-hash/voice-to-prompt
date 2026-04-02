@@ -10,6 +10,43 @@ import AVFoundation
 //  v4.0: 長文対応、意図汲み取り精度向上、60秒制限完全対策
 // ============================================================
 
+// ============================================================
+//  履歴保存 (JSON Lines形式、自動バックアップ)
+// ============================================================
+let HISTORY_DIR = NSHomeDirectory() + "/Desktop/voice-input/history"
+let HISTORY_FILE = HISTORY_DIR + "/voice_history.jsonl"
+
+func ensureHistoryDir() {
+    try? FileManager.default.createDirectory(atPath: HISTORY_DIR, withIntermediateDirectories: true)
+}
+
+func saveHistory(raw: String, prompt: String, success: Bool) {
+    ensureHistoryDir()
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    df.locale = Locale(identifier: "en_US_POSIX")
+    let entry: [String: Any] = [
+        "timestamp": df.string(from: Date()),
+        "raw": raw,
+        "prompt": prompt,
+        "success": success,
+        "id": UUID().uuidString
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: entry),
+          let line = String(data: data, encoding: .utf8) else { return }
+    let lineData = (line + "\n").data(using: .utf8)!
+
+    if FileManager.default.fileExists(atPath: HISTORY_FILE) {
+        if let fh = FileHandle(forWritingAtPath: HISTORY_FILE) {
+            fh.seekToEndOfFile()
+            fh.write(lineData)
+            fh.closeFile()
+        }
+    } else {
+        FileManager.default.createFile(atPath: HISTORY_FILE, contents: lineData)
+    }
+}
+
 // --- ファイル読み込み ---
 func loadFile(_ name: String) -> String? {
     for dir in [
@@ -39,49 +76,50 @@ func loadApiKey() -> String {
 // ============================================================
 //  Gemini API (並列リクエスト、最速応答を採用)
 // ============================================================
-// 高速API: 3モデル並列、最速応答を即採用、入力長に応じたトークン制限
+// Gemini API: 1モデルずつ順次試行 (レート制限対策: 1回の入力で1リクエストのみ)
+// 429の場合だけ次のモデルへフォールバック
 func geminiRace(system: String, user: String, apiKey: String, done: @escaping (String?) -> Void) {
     let models = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
-    let lock = NSLock()
-    var finished = false
 
-    // 入力の長さに応じてmaxOutputTokensを最適化 (短い→速い)
-    let inputLen = user.count
-    let maxTokens = inputLen < 100 ? 300 : (inputLen < 300 ? 600 : 1200)
-
-    for model in models {
+    func tryModel(_ i: Int) {
+        guard i < models.count else { done(nil); return }
+        let model = models[i]
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 8  // 高速フェイル
+        req.timeoutInterval = 12
         let body: [String: Any] = [
             "system_instruction": ["parts": [["text": system]]],
             "contents": [["parts": [["text": user]]]],
-            "generationConfig": ["maxOutputTokens": maxTokens, "temperature": 0.15]
+            "generationConfig": ["maxOutputTokens": 2000, "temperature": 0.2]
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: req) { data, resp, _ in
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+
+            if code == 429 {
+                // レート制限: 5秒待って次のモデル
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5) { tryModel(i + 1) }
+                return
+            }
+            if code == 404 {
+                tryModel(i + 1)
+                return
+            }
+
             guard code == 200, let data = data,
                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let c = (j["candidates"] as? [[String: Any]])?.first,
                   let p = (c["content"] as? [String: Any])?["parts"] as? [[String: Any]],
                   let t = p.first?["text"] as? String, !t.isEmpty
-            else { return }
-            lock.lock()
-            let already = finished; if !already { finished = true }
-            lock.unlock()
-            if !already { done(t) }
+            else { tryModel(i + 1); return }
+
+            done(t)
         }.resume()
     }
-
-    // 8秒でどれも返らなかったら nil
-    DispatchQueue.global().asyncAfter(deadline: .now() + 8.5) {
-        lock.lock(); let already = finished; if !already { finished = true }; lock.unlock()
-        if !already { done(nil) }
-    }
+    tryModel(0)
 }
 
 // ============================================================
@@ -209,6 +247,7 @@ class App: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Shift+Space で音声入力", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "🎤 音声入力 開始/停止", action: #selector(toggle), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "📋 履歴を開く", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "終了", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -337,11 +376,15 @@ class App: NSObject, NSApplicationDelegate {
                 self.isProcessing = false
                 self.statusItem.button?.title = "🎤"
 
-                let output = (result != nil && !result!.isEmpty) ? result! : text
+                let ok = result != nil && !result!.isEmpty
+                let output = ok ? result! : text
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(output, forType: .string)
 
-                if result != nil && !result!.isEmpty {
+                // 履歴保存 (元テキスト + 変換後プロンプト)
+                saveHistory(raw: text, prompt: output, success: ok)
+
+                if ok {
                     self.overlay.show("✅ Cmd+V で貼り付け", color: .systemGreen)
                     notify("プロンプト生成完了", String(output.prefix(100)))
                 } else {
@@ -351,6 +394,19 @@ class App: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.overlay.hide() }
             }
         }
+    }
+
+    @objc func openHistory() {
+        ensureHistoryDir()
+        // ターミナルで履歴ビューアを開く
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(NSHomeDirectory())/.local/bin/vp-history"
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
     }
 
     @objc func quit() { NSApp.terminate(nil) }

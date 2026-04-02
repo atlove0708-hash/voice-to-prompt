@@ -1,0 +1,201 @@
+#!/bin/bash
+# vp-view - 履歴をブラウザで見やすく表示
+# 使い方: vp-view
+
+HISTORY_FILE="$HOME/Desktop/voice-input/history/voice_history.jsonl"
+HISTORY_DIR="$HOME/Desktop/voice-input/history"
+HTML_FILE="$HISTORY_DIR/index.html"
+
+if [ ! -f "$HISTORY_FILE" ]; then
+    echo "履歴がありません。Shift+Space で音声入力してください。"
+    exit 0
+fi
+
+# 日付別フォルダに整理
+python3 << 'PYTHON'
+import json, os, sys
+from pathlib import Path
+from datetime import datetime
+
+history_file = os.path.expanduser("~/Desktop/voice-input/history/voice_history.jsonl")
+history_dir = os.path.expanduser("~/Desktop/voice-input/history")
+
+entries = []
+with open(history_file, "r") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except:
+            pass
+
+# 日付フォルダに個別ファイル保存
+for e in entries:
+    ts = e.get("timestamp", "")
+    date_str = ts[:10] if len(ts) >= 10 else "unknown"
+    date_dir = os.path.join(history_dir, "dates", date_str)
+    os.makedirs(date_dir, exist_ok=True)
+
+    eid = e.get("id", ts.replace(":", "-"))
+    filepath = os.path.join(date_dir, f"{eid}.json")
+    if not os.path.exists(filepath):
+        with open(filepath, "w") as f:
+            json.dump(e, f, ensure_ascii=False, indent=2)
+
+# 日付ごとに集計
+by_date = {}
+for e in entries:
+    ts = e.get("timestamp", "")
+    date_str = ts[:10] if len(ts) >= 10 else "unknown"
+    by_date.setdefault(date_str, []).append(e)
+
+# HTML生成
+html = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice to Prompt - 履歴</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;background:#0f172a;color:#f1f5f9;padding:20px;max-width:900px;margin:0 auto}
+h1{font-size:22px;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.sub{color:#94a3b8;font-size:14px;margin-bottom:24px}
+.stats{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+.stat{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px 18px;font-size:13px}
+.stat b{font-size:20px;color:#a5b4fc;display:block;margin-bottom:2px}
+.search-bar{width:100%;padding:10px 16px;background:#1e293b;border:1px solid #334155;border-radius:10px;color:#f1f5f9;font-size:14px;margin-bottom:20px;outline:none;font-family:inherit}
+.search-bar:focus{border-color:#6366f1}
+.date-group{margin-bottom:24px}
+.date-header{font-size:15px;font-weight:600;color:#a5b4fc;margin-bottom:10px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.date-header:hover{color:#c4b5fd}
+.date-header .count{font-size:12px;color:#64748b;font-weight:400}
+.entries{display:flex;flex-direction:column;gap:8px}
+.entry{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px;transition:border-color 0.15s;cursor:pointer}
+.entry:hover{border-color:#6366f1}
+.entry-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.time{font-size:12px;color:#64748b}
+.badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}
+.badge.ok{background:rgba(34,197,94,0.15);color:#22c55e}
+.badge.fail{background:rgba(239,68,68,0.15);color:#ef4444}
+.raw{font-size:13px;color:#94a3b8;margin-bottom:6px;line-height:1.6}
+.raw::before{content:"🎤 ";font-size:12px}
+.prompt{font-size:14px;color:#f1f5f9;line-height:1.7;white-space:pre-wrap}
+.prompt::before{content:"✨ ";font-size:12px}
+.copy-btn{display:inline-block;margin-top:8px;padding:4px 12px;background:#6366f1;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit}
+.copy-btn:hover{background:#4f46e5}
+.copy-btn:active{transform:scale(0.96)}
+.copied{background:#22c55e !important}
+.empty{text-align:center;color:#64748b;padding:40px;font-size:14px}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<h1>🎤 Voice to Prompt 履歴</h1>
+<p class="sub">過去の音声入力と生成されたプロンプトの一覧</p>
+"""
+
+total = len(entries)
+success = sum(1 for e in entries if e.get("success"))
+dates = len(by_date)
+html += f"""
+<div class="stats">
+<div class="stat"><b>{total}</b>総入力回数</div>
+<div class="stat"><b>{success}</b>変換成功</div>
+<div class="stat"><b>{total - success}</b>フォールバック</div>
+<div class="stat"><b>{dates}</b>日間の履歴</div>
+</div>
+"""
+
+html += '<input type="text" class="search-bar" id="search" placeholder="🔍 キーワードで検索..." oninput="filterEntries()">\n'
+html += '<div id="entries">\n'
+
+for date_str in sorted(by_date.keys(), reverse=True):
+    items = by_date[date_str]
+    # 日付を読みやすく
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        weekday = ["月","火","水","木","金","土","日"][dt.weekday()]
+        display_date = f"{dt.month}月{dt.day}日（{weekday}）"
+    except:
+        display_date = date_str
+
+    html += f'<div class="date-group" data-date="{date_str}">\n'
+    html += f'<div class="date-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">'
+    html += f'📅 {display_date} <span class="count">{len(items)}件</span></div>\n'
+    html += '<div class="entries">\n'
+
+    for e in reversed(items):
+        ts = e.get("timestamp", "")
+        time_str = ts[11:16] if len(ts) >= 16 else ""
+        raw = e.get("raw", "").replace("<", "&lt;").replace(">", "&gt;")
+        prompt = e.get("prompt", "").replace("<", "&lt;").replace(">", "&gt;")
+        ok = e.get("success", False)
+        badge_class = "ok" if ok else "fail"
+        badge_text = "変換成功" if ok else "元テキスト"
+        eid = e.get("id", "")
+
+        html += f"""<div class="entry" data-raw="{raw.lower()}" data-prompt="{prompt.lower()}">
+<div class="entry-header">
+<span class="time">{time_str}</span>
+<span class="badge {badge_class}">{badge_text}</span>
+</div>
+<div class="raw">{raw}</div>
+<div class="prompt">{prompt}</div>
+<button class="copy-btn" onclick="copyText(this, '{eid}')">コピー</button>
+</div>
+"""
+    html += '</div></div>\n'
+
+if not entries:
+    html += '<div class="empty">まだ履歴がありません。<br>Shift+Space で音声入力してください。</div>\n'
+
+html += '</div>\n'
+
+# JavaScript
+html += """
+<script>
+const allPrompts = {};
+"""
+for e in entries:
+    eid = e.get("id", "")
+    prompt = e.get("prompt", "").replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+    html += f"allPrompts['{eid}'] = '{prompt}';\n"
+
+html += """
+function copyText(btn, id) {
+    const text = allPrompts[id] || '';
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'コピーしました！';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 1500);
+    });
+}
+
+function filterEntries() {
+    const q = document.getElementById('search').value.toLowerCase();
+    document.querySelectorAll('.entry').forEach(el => {
+        const raw = el.dataset.raw || '';
+        const prompt = el.dataset.prompt || '';
+        el.style.display = (raw.includes(q) || prompt.includes(q)) ? '' : 'none';
+    });
+    // 空のdate-groupを非表示
+    document.querySelectorAll('.date-group').forEach(g => {
+        const visible = g.querySelectorAll('.entry:not([style*="display: none"])');
+        g.style.display = visible.length > 0 ? '' : 'none';
+    });
+}
+</script>
+</body></html>"""
+
+with open(os.path.expanduser("~/Desktop/voice-input/history/index.html"), "w") as f:
+    f.write(html)
+
+print(f"Generated: {total} entries, {dates} dates")
+PYTHON
+
+# ブラウザで開く
+open "$HTML_FILE"
+echo "✅ 履歴ビューアを開きました"

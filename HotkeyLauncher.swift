@@ -398,15 +398,11 @@ class App: NSObject, NSApplicationDelegate {
 
     @objc func openHistory() {
         ensureHistoryDir()
-        // ターミナルで履歴ビューアを開く
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(NSHomeDirectory())/.local/bin/vp-history"
-        end tell
-        """
-        var error: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        // vp-view でHTMLビューアを開く
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["-c", "\(NSHomeDirectory())/.local/bin/vp-view"]
+        try? p.run()
     }
 
     @objc func quit() { NSApp.terminate(nil) }
